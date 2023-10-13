@@ -4,9 +4,11 @@
 #include <errhandlingapi.h>
 #include <excpt.h>
 #include <handleapi.h>
+#include <libloaderapi.h>
 #include <memoryapi.h>
 #include <minwinbase.h>
 #include <processthreadsapi.h>
+#include <psapi.h>
 #include <synchapi.h>
 #include <sysinfoapi.h>
 #include <vcruntime.h>
@@ -61,7 +63,6 @@ LONG access_violation_handler(EXCEPTION_POINTERS *ExceptionInfo) {
     }
 
     printf("access violation at %p (rw=%d, rip=%p, rsp=%p, rax=%p)\n", (void *) fault_addr, rw_flag, ExceptionInfo->ExceptionRecord->ExceptionAddress, (void *) ExceptionInfo->ContextRecord->Rsp, (void *) ExceptionInfo->ContextRecord->Rax);
-    dbg_ctrl->Output(DEBUG_OUTPUT_NORMAL, "access violation at %p (rw=%d)\n", (void *) fault_addr, rw_flag);
     load_remote_pages(base_addr, alloc_gran);
 
     if (rw_flag == 8) {
@@ -90,9 +91,20 @@ DWORD WINAPI ldb_monitor_trampoline(LPVOID arg) {
         }
 
         DEBUG_MODULE_PARAMETERS mod_info;
+        HMODULE mod;
+
+        dbg_syms->GetModuleParameters(1, NULL, i, &mod_info);
+        GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCSTR) mod_info.Base, &mod);
+
+        if (mod) {
+            char buf[1024];
+
+            GetModuleBaseName(GetCurrentProcess(), mod, buf, 1024);
+            printf("already loaded\n");
+            continue;
+        }
 
         printf("loading module %d\n", i);
-        dbg_syms->GetModuleParameters(1, NULL, i, &mod_info);
         load_remote_pages(mod_info.Base, mod_info.Size);
     }
 

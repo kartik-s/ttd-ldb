@@ -16,11 +16,36 @@
 
 thread_local IDebugAdvanced *dbg_adv = nullptr;
 thread_local IDebugControl *dbg_ctrl = nullptr;
-thread_local IDebugDataSpaces4 *dbg_mem = nullptr;
+thread_local IDebugDataSpaces *dbg_mem = nullptr;
 thread_local IDebugSymbols  *dbg_syms = nullptr;
 
 static const char *remote_options = nullptr;
+static DWORD alloc_gran;
 static DWORD page_size;
+
+void load_remote_pages(ULONG64 addr, ULONG num_bytes) {
+    ULONG64 page_addr = addr - (addr % page_size);
+
+    while (page_addr < addr + num_bytes) {
+        MEMORY_BASIC_INFORMATION mem_info;
+
+        VirtualQuery((void *) page_addr, &mem_info, sizeof(mem_info));
+
+        if (mem_info.State == MEM_FREE) {
+            ULONG64 base_addr = page_addr - (page_addr % alloc_gran);
+
+            VirtualAlloc((void *) base_addr, alloc_gran, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+            dbg_mem->ReadVirtualUncached(base_addr, (void *) base_addr, alloc_gran, nullptr);
+            page_addr = base_addr + alloc_gran;
+        } else {
+            DWORD old_prot;
+
+            VirtualProtect((void *) page_addr, mem_info.RegionSize, PAGE_EXECUTE_READWRITE, &old_prot);
+            dbg_mem->ReadVirtualUncached(page_addr, (void *) page_addr, mem_info.RegionSize, nullptr);
+            page_addr += mem_info.RegionSize;
+        }
+    }
+}
 
 LONG access_violation_handler(EXCEPTION_POINTERS *ExceptionInfo) {
     if (ExceptionInfo->ExceptionRecord->ExceptionCode != EXCEPTION_ACCESS_VIOLATION) {
@@ -29,9 +54,7 @@ LONG access_violation_handler(EXCEPTION_POINTERS *ExceptionInfo) {
 
     int rw_flag = ExceptionInfo->ExceptionRecord->ExceptionInformation[0];
     ULONG64 fault_addr = ExceptionInfo->ExceptionRecord->ExceptionInformation[1];
-    ULONG64 page_addr = fault_addr - (fault_addr % page_size);
-    void *page;
-    MEMORY_BASIC_INFORMATION mem_info;
+    ULONG64 base_addr = fault_addr - (fault_addr % alloc_gran);
 
     if (fault_addr == 0xFFFFFFFFFFFFFFFF) {
         return EXCEPTION_CONTINUE_SEARCH;
@@ -39,20 +62,11 @@ LONG access_violation_handler(EXCEPTION_POINTERS *ExceptionInfo) {
 
     printf("access violation at %p (rw=%d, rip=%p, rsp=%p, rax=%p)\n", (void *) fault_addr, rw_flag, ExceptionInfo->ExceptionRecord->ExceptionAddress, (void *) ExceptionInfo->ContextRecord->Rsp, (void *) ExceptionInfo->ContextRecord->Rax);
     dbg_ctrl->Output(DEBUG_OUTPUT_NORMAL, "access violation at %p (rw=%d)\n", (void *) fault_addr, rw_flag);
+    load_remote_pages(base_addr, alloc_gran);
 
-    VirtualQuery((void *) page_addr, &mem_info, sizeof(mem_info));
-
-    if (mem_info.State == MEM_FREE) {
-        ULONG num_bytes_read;
-        dbg_ctrl->Output(DEBUG_OUTPUT_NORMAL, "loading page at %p\n", (void *) page_addr);
-        page = VirtualAlloc((void *) page_addr, page_size, MEM_COMMIT | MEM_RESERVE, (rw_flag == 8) ? PAGE_EXECUTE_READWRITE : PAGE_READWRITE);
-        dbg_mem->ReadVirtualUncached(page_addr, (void *) page_addr, page_size, &num_bytes_read);
+    if (rw_flag == 8) {
+        FlushInstructionCache(GetCurrentProcess(), (void *) base_addr, alloc_gran);
     }
-
-    DWORD old_prot;
-
-    VirtualProtect((void *) page_addr, page_size, (rw_flag == 8) ? PAGE_EXECUTE_READ : PAGE_READWRITE, &old_prot);
-    FlushInstructionCache(GetCurrentProcess(), page, page_size);
 
     return EXCEPTION_CONTINUE_EXECUTION;
 }
@@ -60,9 +74,30 @@ LONG access_violation_handler(EXCEPTION_POINTERS *ExceptionInfo) {
 DWORD WINAPI ldb_monitor_trampoline(LPVOID arg) {
     DebugConnect(remote_options, __uuidof(IDebugAdvanced), (void **) &dbg_adv);
     DebugConnect(remote_options, __uuidof(IDebugControl), (void **) &dbg_ctrl);
-    DebugConnect(remote_options, __uuidof(IDebugDataSpaces4), (void **) &dbg_mem);
+    DebugConnect(remote_options, __uuidof(IDebugDataSpaces), (void **) &dbg_mem);
     DebugConnect(remote_options, __uuidof(IDebugSymbols), (void **) &dbg_syms);
-    
+
+    ULONG num_loaded;
+    ULONG num_unloaded;
+    ULONG sbcl_index;
+
+    dbg_syms->GetNumberModules(&num_loaded, &num_unloaded);
+    dbg_syms->GetModuleByModuleName("sbcl", 0, &sbcl_index, nullptr);
+
+    for (int i = 0; i < num_loaded; i += 1) {
+        if (i == sbcl_index) {
+            continue;
+        }
+
+        DEBUG_MODULE_PARAMETERS mod_info;
+
+        printf("loading module %d\n", i);
+        dbg_syms->GetModuleParameters(1, NULL, i, &mod_info);
+        load_remote_pages(mod_info.Base, mod_info.Size);
+    }
+
+    printf("done loading modules\n");
+
     ULONG64 jump_addr;
 
     dbg_syms->GetOffsetByName("sbcl!ldb_monitor",  &jump_addr);
@@ -83,7 +118,8 @@ int main(int argc, char **argv) {
     static SYSTEM_INFO sys_info;
 
     GetSystemInfo(&sys_info);
-    page_size = sys_info.dwAllocationGranularity;
+    alloc_gran = sys_info.dwAllocationGranularity;
+    page_size = sys_info.dwPageSize;
 
     CONTEXT orig_context;
     CONTEXT thread_context;
@@ -95,10 +131,10 @@ int main(int argc, char **argv) {
     InitializeContext(&thread_context, CONTEXT_ALL, nullptr, &thread_context_len);
 
     dbg_adv->GetThreadContext(&orig_context, orig_context_len);
-    // GetThreadContext(ldb_thread, &thread_context);
+    GetThreadContext(ldb_thread, &thread_context);
     
-    // thread_context.SegFs = orig_context.SegFs;
-    // SetThreadContext(ldb_thread, &thread_context);
+    thread_context.SegFs = orig_context.SegFs;
+    SetThreadContext(ldb_thread, &thread_context);
 
     ResumeThread(ldb_thread);
     WaitForSingleObject(ldb_thread, INFINITE);

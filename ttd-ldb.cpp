@@ -1,13 +1,16 @@
 #include <cstdio>
+#include <cstdlib>
 
 #include <dbgeng.h>
 #include <errhandlingapi.h>
 #include <excpt.h>
+#include <fileapi.h>
 #include <handleapi.h>
 #include <libloaderapi.h>
 #include <memoryapi.h>
 #include <minwinbase.h>
 #include <minwindef.h>
+#include <mmeapi.h>
 #include <process.h>
 #include <processthreadsapi.h>
 #include <psapi.h>
@@ -29,8 +32,54 @@ static const char *remote_options = nullptr;
 static DWORD alloc_gran;
 static DWORD page_size;
 
-void load_remote_pages(ULONG64 addr, ULONG num_bytes) {
+#define SBCL_CORE_FILE_PATH "C:/Users/kssingh/sbcl/output/sbcl.core"
+#define CORE_FILE_RO_SPACE_OFFSET 0x10c0000
+
+void load_read_only_space() {
+    ULONG64 offset;
+    ULONG type_id;
+    DWORD64 READ_ONLY_SPACE_START;
+    DWORD64 READ_ONLY_SPACE_END;
+    ULONG64 sbcl_base;
+
+    dbg_syms->GetOffsetByName("sbcl!READ_ONLY_SPACE_START", &offset);
+    dbg_syms->GetOffsetTypeId(offset, &type_id, &sbcl_base);
+    dbg_syms->ReadTypedDataVirtual(offset, sbcl_base, type_id, &READ_ONLY_SPACE_START, sizeof(READ_ONLY_SPACE_START), nullptr);
+
+    dbg_syms->GetOffsetByName("sbcl!READ_ONLY_SPACE_END", &offset);
+    dbg_syms->GetOffsetTypeId(offset, &type_id, &sbcl_base);
+    dbg_syms->ReadTypedDataVirtual(offset, sbcl_base, type_id, &READ_ONLY_SPACE_END, sizeof(READ_ONLY_SPACE_END), nullptr);
+
+    HANDLE core_file = CreateFileA(
+        SBCL_CORE_FILE_PATH,
+        GENERIC_READ,
+        FILE_SHARE_READ,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr
+    );
+
+    if (core_file == INVALID_HANDLE_VALUE) {
+        printf("%lx\n", GetLastError());
+    }
+
+    VirtualAlloc((void *) READ_ONLY_SPACE_START, READ_ONLY_SPACE_END - READ_ONLY_SPACE_START, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    SetFilePointer(core_file, CORE_FILE_RO_SPACE_OFFSET, nullptr, FILE_BEGIN);
+    BOOL res = ReadFile(core_file, (void *) READ_ONLY_SPACE_START, READ_ONLY_SPACE_END - READ_ONLY_SPACE_START, nullptr, nullptr);
+    if (!res) {
+        printf("%lx\n", GetLastError());
+    }
+    CloseHandle(core_file);
+
+    DWORD old_prot;
+
+    VirtualProtect((void *) READ_ONLY_SPACE_START, READ_ONLY_SPACE_END - READ_ONLY_SPACE_START, PAGE_READONLY, &old_prot);
+}
+
+void load_remote_pages(ULONG64 addr, ULONG num_bytes, BOOL is_stack) {
     ULONG64 page_addr = addr - (addr % page_size);
+    BOOL first = TRUE;
 
     while (page_addr < addr + num_bytes) {
         MEMORY_BASIC_INFORMATION mem_info;
@@ -43,17 +92,18 @@ void load_remote_pages(ULONG64 addr, ULONG num_bytes) {
             ULONG64 base_addr = page_addr - (page_addr % alloc_gran);
 
             VirtualAlloc((void *) base_addr, alloc_gran, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-            dbg_mem->GetValidRegionVirtual(base_addr, alloc_gran, &valid_base, &valid_size);
+            dbg_mem->GetValidRegionVirtual(first ? addr : base_addr, alloc_gran, &valid_base, &valid_size);
             page_addr = base_addr + alloc_gran;
         } else {
             DWORD old_prot;
 
             VirtualProtect((void *) page_addr, mem_info.RegionSize, PAGE_EXECUTE_READWRITE, &old_prot);
-            dbg_mem->GetValidRegionVirtual(page_addr, mem_info.RegionSize, &valid_base, &valid_size);
+            dbg_mem->GetValidRegionVirtual(first ? addr : page_addr, mem_info.RegionSize, &valid_base, &valid_size);
             page_addr += mem_info.RegionSize;
         }
 
         dbg_mem->ReadVirtualUncached(valid_base, (void *) valid_base, valid_size, nullptr);
+        first = FALSE;
     }
 }
 
@@ -66,8 +116,13 @@ LONG access_violation_handler(EXCEPTION_POINTERS *ExceptionInfo) {
     ULONG64 fault_addr = ExceptionInfo->ExceptionRecord->ExceptionInformation[1];
     ULONG64 base_addr = fault_addr - (fault_addr % alloc_gran);
 
+    if (fault_addr == 0x0 || fault_addr == 0x20) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    BOOL is_stack = llabs((LONG64) fault_addr - (LONG64) ExceptionInfo->ContextRecord->Rsp) <= page_size;
     // printf("access violation at %p (rw=%d, rip=%p, rsp=%p, rax=%p)\n", (void *) fault_addr, rw_flag, ExceptionInfo->ExceptionRecord->ExceptionAddress, (void *) ExceptionInfo->ContextRecord->Rsp, (void *) ExceptionInfo->ContextRecord->Rax);
-    load_remote_pages(base_addr, alloc_gran);
+    load_remote_pages(is_stack ? fault_addr : base_addr, alloc_gran, is_stack);
 
     if (rw_flag == 8) {
         FlushInstructionCache(GetCurrentProcess(), (void *) base_addr, alloc_gran);
@@ -77,14 +132,38 @@ LONG access_violation_handler(EXCEPTION_POINTERS *ExceptionInfo) {
 }
 
 unsigned WINAPI ldb_monitor_trampoline(void *arg) {
+    // set stack limits before anything else
+    TEB *current_teb = NtCurrentTeb();
+    TEB *remote_teb;
+    DWORD old_prot;
+    
+    dbg_sysobjs->GetCurrentThreadTeb((PULONG64) &remote_teb);
+    VirtualProtect(current_teb, sizeof(TEB), PAGE_READWRITE, &old_prot);
+    current_teb->Reserved1[1] = remote_teb->Reserved1[1];
+    current_teb->Reserved1[2] = remote_teb->Reserved1[2];
+
+    // connect to debugger
+#if 0
     DebugConnect(remote_options, __uuidof(IDebugAdvanced), (void **) &dbg_adv);
     DebugConnect(remote_options, __uuidof(IDebugControl), (void **) &dbg_ctrl);
     DebugConnect(remote_options, __uuidof(IDebugDataSpaces4), (void **) &dbg_mem);
     DebugConnect(remote_options, __uuidof(IDebugSymbols), (void **) &dbg_syms);
     DebugConnect(remote_options, __uuidof(IDebugSystemObjects), (void **) &dbg_sysobjs);
+#endif
 
-    AddVectoredExceptionHandler(TRUE, access_violation_handler);
+    // set sb_vm_thread
+    ULONG64 offset;
+    ULONG type_id;
+    DWORD sbcl_thread_tls_index;
+    ULONG64 sbcl_base;
 
+    dbg_syms->GetOffsetByName("sbcl!sbcl_thread_tls_index", &offset);
+    dbg_syms->GetOffsetTypeId(offset, &type_id, &sbcl_base);
+    dbg_syms->ReadTypedDataVirtual(offset, sbcl_base, type_id, &sbcl_thread_tls_index, sizeof(sbcl_thread_tls_index), nullptr);
+
+    TlsSetValue(sbcl_thread_tls_index, remote_teb->TlsSlots[sbcl_thread_tls_index]);
+
+    // load remote modules
     ULONG num_loaded;
     ULONG num_unloaded;
     ULONG sbcl_index;
@@ -107,28 +186,60 @@ unsigned WINAPI ldb_monitor_trampoline(void *arg) {
             continue;
         }
 
-        load_remote_pages(mod_info.Base, mod_info.Size);
+        load_remote_pages(mod_info.Base, mod_info.Size, FALSE);
     }
 
-    ULONG64 offset;
-    ULONG type_id;
-    DWORD sbcl_thread_tls_index;
-    ULONG64 sbcl_base;
+    // load read-only space from the core file since WinDbg doesn't seem to have the correct contents
+    load_read_only_space();
 
-    dbg_syms->GetOffsetByName("sbcl!sbcl_thread_tls_index", &offset);
-    dbg_syms->GetOffsetTypeId(offset, &type_id, &sbcl_base);
-    dbg_syms->ReadTypedDataVirtual(offset, sbcl_base, type_id, &sbcl_thread_tls_index, sizeof(sbcl_thread_tls_index), nullptr);
+    // run ldb
+    DWORD remote_context_len;
+    CONTEXT *remote_context;
 
-    ULONG64 teb;
+    InitializeContext(nullptr, CONTEXT_INTEGER, nullptr, &remote_context_len);
+    char remote_context_buf[remote_context_len];
+    InitializeContext(remote_context_buf, CONTEXT_INTEGER, &remote_context, &remote_context_len);
+    dbg_adv->GetThreadContext(remote_context, remote_context_len);
 
-    dbg_sysobjs->GetCurrentThreadTeb(&teb);
-    load_remote_pages(teb, sizeof(TEB));
-    TlsSetValue(sbcl_thread_tls_index, ((TEB *) teb)->TlsSlots[sbcl_thread_tls_index]);
+    ULONG64 fake_foreign_function_call_noassert;
+    dbg_syms->GetOffsetByName("sbcl!fake_foreign_function_call_noassert",  &fake_foreign_function_call_noassert);
+    ((void (*)(CONTEXT **)) (fake_foreign_function_call_noassert))(&remote_context);
 
-    ULONG64 jump_addr;
+    ULONG64 ldb_monitor;
+    dbg_syms->GetOffsetByName("sbcl!ldb_monitor",  &ldb_monitor);
+    ((void (*)()) ldb_monitor)();
 
-    dbg_syms->GetOffsetByName("sbcl!ldb_monitor",  &jump_addr);
-    ((void (*)()) jump_addr)();
+    return 0;
+}
+
+LONG breakpoint_handler(EXCEPTION_POINTERS *ExceptionInfo) {
+    if (ExceptionInfo->ExceptionRecord->ExceptionCode != EXCEPTION_BREAKPOINT) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    DWORD remote_context_len;
+    CONTEXT *remote_context;
+
+    InitializeContext(nullptr, CONTEXT_ALL, nullptr, &remote_context_len);
+    char remote_context_buf[remote_context_len];
+    InitializeContext(remote_context_buf, CONTEXT_ALL, &remote_context, &remote_context_len);
+    dbg_adv->GetThreadContext(remote_context, remote_context_len);
+
+    ExceptionInfo->ContextRecord->Rip = (DWORD64) ldb_monitor_trampoline;
+    ExceptionInfo->ContextRecord->Rsp = remote_context->Rsp;
+
+    load_remote_pages(remote_context->Rsp, page_size, TRUE);
+
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+
+unsigned thread_start_trampoline(void *arg) {
+    DebugConnect(remote_options, __uuidof(IDebugAdvanced), (void **) &dbg_adv);
+    DebugConnect(remote_options, __uuidof(IDebugControl), (void **) &dbg_ctrl);
+    DebugConnect(remote_options, __uuidof(IDebugDataSpaces4), (void **) &dbg_mem);
+    DebugConnect(remote_options, __uuidof(IDebugSymbols), (void **) &dbg_syms);
+    DebugConnect(remote_options, __uuidof(IDebugSystemObjects), (void **) &dbg_sysobjs);
+    DebugBreak();
 
     return 0;
 }
@@ -137,7 +248,9 @@ int main(int argc, char **argv) {
     remote_options = argv[1];
     DebugConnect(remote_options, __uuidof(IDebugAdvanced), (void **) &dbg_adv);
     DebugConnect(remote_options, __uuidof(IDebugControl), (void **) &dbg_ctrl);
+    DebugConnect(remote_options, __uuidof(IDebugDataSpaces4), (void **) &dbg_mem);
     DebugConnect(remote_options, __uuidof(IDebugSymbols), (void **) &dbg_syms);
+    DebugConnect(remote_options, __uuidof(IDebugSystemObjects), (void **) &dbg_sysobjs);
 
     dbg_ctrl->Output(DEBUG_OUTPUT_NORMAL, "debug clients connected, hello!\n");
 
@@ -147,45 +260,30 @@ int main(int argc, char **argv) {
     alloc_gran = sys_info.dwAllocationGranularity;
     page_size = sys_info.dwPageSize;    
 
-    HANDLE ldb_thread = (HANDLE) _beginthreadex(nullptr, 0, ldb_monitor_trampoline, nullptr, CREATE_SUSPENDED, nullptr);
-    printf("%p\n", ldb_thread);
+    HANDLE ldb_thread = (HANDLE) _beginthreadex(nullptr, 0, thread_start_trampoline, nullptr, CREATE_SUSPENDED, nullptr);
 
-    DWORD orig_context_len;
-    CONTEXT *orig_context;
+    DWORD remote_context_len;
+    CONTEXT *remote_context;
+
+    InitializeContext(nullptr, CONTEXT_CONTROL, nullptr, &remote_context_len);
+    char remote_context_buf[remote_context_len];
+    InitializeContext(remote_context_buf, CONTEXT_CONTROL, &remote_context, &remote_context_len);
+    dbg_adv->GetThreadContext(remote_context, remote_context_len);
 
     DWORD thread_context_len;
     CONTEXT *thread_context;
 
-    if (!InitializeContext(nullptr, CONTEXT_ALL, nullptr, &orig_context_len)) {
-        printf("orig len %lx\n", GetLastError());
-    }
-    char orig_context_buf[orig_context_len];
-    if (!InitializeContext(orig_context_buf, CONTEXT_ALL, &orig_context, &orig_context_len)) {
-        printf("orig ctx %lx\n", GetLastError());
-    }
-
-    if (!InitializeContext(nullptr, CONTEXT_ALL, nullptr, &thread_context_len)) {
-        printf("thread len%lx\n", GetLastError());
-    }
+    InitializeContext(nullptr, CONTEXT_CONTROL | CONTEXT_SEGMENTS, nullptr, &thread_context_len);
     char thread_context_buf[thread_context_len];
-    if (!InitializeContext(thread_context_buf, CONTEXT_ALL, &thread_context, &thread_context_len)) {
-        printf("thread ctx: %lx\n", GetLastError());
-    }
+    InitializeContext(thread_context_buf, CONTEXT_CONTROL | CONTEXT_SEGMENTS, &thread_context, &thread_context_len);
+    GetThreadContext(ldb_thread, thread_context);
 
-    HRESULT res = dbg_adv->GetThreadContext(orig_context, orig_context_len);
-    printf("get remote context: %lx\n", res);
-    BOOL res2 = GetThreadContext(ldb_thread, thread_context);
-    printf("get local context: %d\n", res2);
+    // thread_context->Rip = (DWORD64) ldb_monitor_trampoline;
+    // thread_context->Rsp = remote_context->Rsp;
 
-    // thread_context->SegFs = orig_context->SegFs;
-    // thread_context->SegGs = orig_context->SegGs;
-    thread_context->Rbp = orig_context->Rbp;
-    // thread_context->Rsp = orig_context->Rsp;
-
-    res2 = SetThreadContext(ldb_thread, thread_context);
-    if (!res2) {
-        printf("%lx\n", GetLastError());
-    }
+    // SetThreadContext(ldb_thread, thread_context);
+    AddVectoredExceptionHandler(TRUE, access_violation_handler);
+    AddVectoredExceptionHandler(TRUE, breakpoint_handler);
     ResumeThread(ldb_thread);
     WaitForSingleObject(ldb_thread, INFINITE);
     CloseHandle(ldb_thread);

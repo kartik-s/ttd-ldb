@@ -32,51 +32,6 @@ static const char *remote_options = nullptr;
 static DWORD alloc_gran;
 static DWORD page_size;
 
-#define SBCL_CORE_FILE_PATH "C:/Users/kssingh/sbcl/output/sbcl.core"
-#define CORE_FILE_RO_SPACE_OFFSET 0x10c0000
-
-void load_read_only_space() {
-    ULONG64 offset;
-    ULONG type_id;
-    DWORD64 READ_ONLY_SPACE_START;
-    DWORD64 READ_ONLY_SPACE_END;
-    ULONG64 sbcl_base;
-
-    dbg_syms->GetOffsetByName("sbcl!READ_ONLY_SPACE_START", &offset);
-    dbg_syms->GetOffsetTypeId(offset, &type_id, &sbcl_base);
-    dbg_syms->ReadTypedDataVirtual(offset, sbcl_base, type_id, &READ_ONLY_SPACE_START, sizeof(READ_ONLY_SPACE_START), nullptr);
-
-    dbg_syms->GetOffsetByName("sbcl!READ_ONLY_SPACE_END", &offset);
-    dbg_syms->GetOffsetTypeId(offset, &type_id, &sbcl_base);
-    dbg_syms->ReadTypedDataVirtual(offset, sbcl_base, type_id, &READ_ONLY_SPACE_END, sizeof(READ_ONLY_SPACE_END), nullptr);
-
-    HANDLE core_file = CreateFileA(
-        SBCL_CORE_FILE_PATH,
-        GENERIC_READ,
-        FILE_SHARE_READ,
-        nullptr,
-        OPEN_EXISTING,
-        FILE_ATTRIBUTE_NORMAL,
-        nullptr
-    );
-
-    if (core_file == INVALID_HANDLE_VALUE) {
-        printf("%lx\n", GetLastError());
-    }
-
-    VirtualAlloc((void *) READ_ONLY_SPACE_START, READ_ONLY_SPACE_END - READ_ONLY_SPACE_START, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    SetFilePointer(core_file, CORE_FILE_RO_SPACE_OFFSET, nullptr, FILE_BEGIN);
-    BOOL res = ReadFile(core_file, (void *) READ_ONLY_SPACE_START, READ_ONLY_SPACE_END - READ_ONLY_SPACE_START, nullptr, nullptr);
-    if (!res) {
-        printf("%lx\n", GetLastError());
-    }
-    CloseHandle(core_file);
-
-    DWORD old_prot;
-
-    VirtualProtect((void *) READ_ONLY_SPACE_START, READ_ONLY_SPACE_END - READ_ONLY_SPACE_START, PAGE_READONLY, &old_prot);
-}
-
 void load_remote_pages(ULONG64 addr, ULONG num_bytes, BOOL is_stack) {
     ULONG64 page_addr = addr - (addr % page_size);
     BOOL first = TRUE;
@@ -188,9 +143,6 @@ unsigned WINAPI ldb_monitor_trampoline(void *arg) {
 
         load_remote_pages(mod_info.Base, mod_info.Size, FALSE);
     }
-
-    // load read-only space from the core file since WinDbg doesn't seem to have the correct contents
-    load_read_only_space();
 
     // run ldb
     DWORD remote_context_len;

@@ -1,1 +1,1 @@
-clang -Wall -g -gcodeview -fuse-ld=lld -Wl,/pdb: -o ttd-ldb.exe ttd-ldb.cpp -ldbgeng
+clang -Wall -g -gcodeview -fuse-ld=lld -Wl,/pdb: -o ttd-ldb.exe ttd-ldb.cpp -ldbgeng -ldbghelp

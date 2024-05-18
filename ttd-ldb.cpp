@@ -174,7 +174,7 @@ LONG breakpoint_handler(EXCEPTION_POINTERS *ExceptionInfo) {
     ExceptionInfo->ContextRecord->Rip = (DWORD64) ldb_monitor_trampoline;
     ExceptionInfo->ContextRecord->Rsp = remote_context->Rsp;
 
-    load_remote_pages(remote_context->Rsp, page_size, TRUE);
+    load_remote_pages(remote_context->Rsp, page_size);
 
     return EXCEPTION_CONTINUE_EXECUTION;
 }

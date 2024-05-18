@@ -72,8 +72,7 @@ LONG access_violation_handler(EXCEPTION_POINTERS *ExceptionInfo) {
     ULONG64 fault_addr = ExceptionInfo->ExceptionRecord->ExceptionInformation[1];
     ULONG64 base_addr = fault_addr - (fault_addr % alloc_gran);
 
-    BOOL is_stack = llabs((LONG64) fault_addr - (LONG64) ExceptionInfo->ContextRecord->Rsp) <= page_size;
-    load_remote_pages(is_stack ? fault_addr : base_addr, alloc_gran);
+    load_remote_pages(base_addr, alloc_gran);
 
     if (rw_flag == 8) {
         FlushInstructionCache(GetCurrentProcess(), (void *) base_addr, alloc_gran);

@@ -33,7 +33,7 @@ static const char *remote_options = nullptr;
 static DWORD alloc_gran;
 static DWORD page_size;
 
-void load_remote_pages(ULONG64 addr, ULONG num_bytes, BOOL is_stack) {
+void load_remote_pages(ULONG64 addr, ULONG num_bytes) {
     ULONG64 page_addr = addr - (addr % page_size);
     BOOL first = TRUE;
 
@@ -73,7 +73,7 @@ LONG access_violation_handler(EXCEPTION_POINTERS *ExceptionInfo) {
     ULONG64 base_addr = fault_addr - (fault_addr % alloc_gran);
 
     BOOL is_stack = llabs((LONG64) fault_addr - (LONG64) ExceptionInfo->ContextRecord->Rsp) <= page_size;
-    load_remote_pages(is_stack ? fault_addr : base_addr, alloc_gran, is_stack);
+    load_remote_pages(is_stack ? fault_addr : base_addr, alloc_gran);
 
     if (rw_flag == 8) {
         FlushInstructionCache(GetCurrentProcess(), (void *) base_addr, alloc_gran);

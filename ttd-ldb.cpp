@@ -72,10 +72,6 @@ LONG access_violation_handler(EXCEPTION_POINTERS *ExceptionInfo) {
     ULONG64 fault_addr = ExceptionInfo->ExceptionRecord->ExceptionInformation[1];
     ULONG64 base_addr = fault_addr - (fault_addr % alloc_gran);
 
-    if (fault_addr == 0x0 || fault_addr == 0x20) {
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-
     BOOL is_stack = llabs((LONG64) fault_addr - (LONG64) ExceptionInfo->ContextRecord->Rsp) <= page_size;
     // printf("access violation at %p (rw=%d, rip=%p, rsp=%p, rax=%p)\n", (void *) fault_addr, rw_flag, ExceptionInfo->ExceptionRecord->ExceptionAddress, (void *) ExceptionInfo->ContextRecord->Rsp, (void *) ExceptionInfo->ContextRecord->Rax);
     load_remote_pages(is_stack ? fault_addr : base_addr, alloc_gran, is_stack);
@@ -88,50 +84,15 @@ LONG access_violation_handler(EXCEPTION_POINTERS *ExceptionInfo) {
 }
 
 unsigned WINAPI ldb_monitor_trampoline(void *arg) {
-    // load remote modules
-    ULONG num_loaded;
-    ULONG num_unloaded;
     ULONG sbcl_index;
-
-    dbg_syms->GetNumberModules(&num_loaded, &num_unloaded);
-    dbg_syms->GetModuleByModuleName("sbcl", 0, &sbcl_index, nullptr);
-
-    for (int i = 0; i < num_loaded; i += 1) {
-        if (i == sbcl_index) {
-            continue;
-        }
-
-        DEBUG_MODULE_PARAMETERS mod_info;
-        MODULEINFO local_info;
-        HMODULE mod;
-        char buf[1024];
-
-        ZeroMemory(&local_info, sizeof(local_info));
-
-        dbg_syms->GetModuleParameters(1, NULL, i, &mod_info);
-        dbg_syms->GetModuleNameString(DEBUG_MODNAME_IMAGE, i, 0, buf, 1024, NULL);
-        mod = LoadLibraryEx(buf, NULL, 0);
-        GetModuleInformation(GetCurrentProcess(), mod, &local_info, sizeof(local_info));
-        dbg_ctrl->Output(DEBUG_OUTPUT_NORMAL, "%s: %p (bases match? %d)\n", buf, mod, mod_info.Base == (ULONG64) local_info.lpBaseOfDll);
-#if 0
-        GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCSTR) mod_info.Base, &mod);
-
-        if (mod) {
-            continue;
-        }
-
-        load_remote_pages(mod_info.Base, mod_info.Size, FALSE);
-#endif
-    }
-
-    dbg_ctrl->Output(DEBUG_OUTPUT_NORMAL, "loaded libraries\n");
-
-    // fix up IAT
     DEBUG_MODULE_PARAMETERS sbcl_info;
+
+    dbg_syms->GetModuleByModuleName("sbcl", 0, &sbcl_index, nullptr);
+    dbg_syms->GetModuleParameters(1, NULL, sbcl_index, &sbcl_info);
+
+    // load remote modules + fix up imports
     PIMAGE_SECTION_HEADER header;
     ULONG size;
-
-    dbg_syms->GetModuleParameters(1, NULL, sbcl_index, &sbcl_info);
 
     PIMAGE_IMPORT_DESCRIPTOR import_desc = (PIMAGE_IMPORT_DESCRIPTOR) ImageDirectoryEntryToDataEx((void *) sbcl_info.Base, TRUE, IMAGE_DIRECTORY_ENTRY_IMPORT, &size, &header);
 
@@ -139,7 +100,7 @@ unsigned WINAPI ldb_monitor_trampoline(void *arg) {
         LPCSTR import_name = (LPCSTR) (sbcl_info.Base + import_desc->Name);
 
         dbg_ctrl->Output(DEBUG_OUTPUT_NORMAL, "IAT: %s\n", import_name);
-        HMODULE import_mod = GetModuleHandleA(import_name);
+        HMODULE import_mod = LoadLibraryExA(import_name, NULL, 0);
 
         PIMAGE_THUNK_DATA thunk = (PIMAGE_THUNK_DATA) (sbcl_info.Base + import_desc->FirstThunk);
         PIMAGE_THUNK_DATA name = (PIMAGE_THUNK_DATA) (sbcl_info.Base + import_desc->Characteristics);
@@ -161,15 +122,6 @@ unsigned WINAPI ldb_monitor_trampoline(void *arg) {
     VirtualProtect(current_teb, sizeof(TEB), PAGE_READWRITE, &old_prot);
     current_teb->Reserved1[1] = remote_teb->Reserved1[1];
     current_teb->Reserved1[2] = remote_teb->Reserved1[2];
-
-    // connect to debugger
-#if 0
-    DebugConnect(remote_options, __uuidof(IDebugAdvanced), (void **) &dbg_adv);
-    DebugConnect(remote_options, __uuidof(IDebugControl), (void **) &dbg_ctrl);
-    DebugConnect(remote_options, __uuidof(IDebugDataSpaces4), (void **) &dbg_mem);
-    DebugConnect(remote_options, __uuidof(IDebugSymbols3), (void **) &dbg_syms);
-    DebugConnect(remote_options, __uuidof(IDebugSystemObjects), (void **) &dbg_sysobjs);
-#endif
 
     // set sb_vm_thread
     ULONG64 offset;
@@ -257,26 +209,6 @@ int main(int argc, char **argv) {
 
     HANDLE ldb_thread = (HANDLE) _beginthreadex(nullptr, 0, thread_start_trampoline, nullptr, CREATE_SUSPENDED, nullptr);
 
-    DWORD remote_context_len;
-    CONTEXT *remote_context;
-
-    InitializeContext(nullptr, CONTEXT_CONTROL, nullptr, &remote_context_len);
-    char remote_context_buf[remote_context_len];
-    InitializeContext(remote_context_buf, CONTEXT_CONTROL, &remote_context, &remote_context_len);
-    dbg_adv->GetThreadContext(remote_context, remote_context_len);
-
-    DWORD thread_context_len;
-    CONTEXT *thread_context;
-
-    InitializeContext(nullptr, CONTEXT_CONTROL | CONTEXT_SEGMENTS, nullptr, &thread_context_len);
-    char thread_context_buf[thread_context_len];
-    InitializeContext(thread_context_buf, CONTEXT_CONTROL | CONTEXT_SEGMENTS, &thread_context, &thread_context_len);
-    GetThreadContext(ldb_thread, thread_context);
-
-    // thread_context->Rip = (DWORD64) ldb_monitor_trampoline;
-    // thread_context->Rsp = remote_context->Rsp;
-
-    // SetThreadContext(ldb_thread, thread_context);
     AddVectoredExceptionHandler(TRUE, access_violation_handler);
     AddVectoredExceptionHandler(TRUE, breakpoint_handler);
     ResumeThread(ldb_thread);

@@ -1,26 +1,6 @@
-#include <cstdio>
-#include <cstdlib>
-
 #include <dbgeng.h>
 #include <DbgHelp.h>
-#include <errhandlingapi.h>
-#include <excpt.h>
-#include <fileapi.h>
-#include <handleapi.h>
-#include <libloaderapi.h>
-#include <memoryapi.h>
-#include <minwinbase.h>
-#include <minwindef.h>
-#include <mmeapi.h>
 #include <process.h>
-#include <processthreadsapi.h>
-#include <psapi.h>
-#include <synchapi.h>
-#include <sysinfoapi.h>
-#include <vcruntime.h>
-#include <winbase.h>
-#include <winerror.h>
-#include <winnt.h>
 #include <winternl.h>
 
 thread_local IDebugAdvanced *dbg_adv = nullptr;

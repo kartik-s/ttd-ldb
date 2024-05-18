@@ -1,6 +1,9 @@
 #include <dbgeng.h>
 #include <DbgHelp.h>
+#include <minwinbase.h>
 #include <process.h>
+#include <processthreadsapi.h>
+#include <winbase.h>
 #include <winternl.h>
 
 thread_local IDebugAdvanced *dbg_adv = nullptr;
@@ -62,6 +65,12 @@ LONG access_violation_handler(EXCEPTION_POINTERS *ExceptionInfo) {
 }
 
 unsigned WINAPI ldb_monitor_trampoline(void *arg) {
+    DebugConnect(remote_options, __uuidof(IDebugAdvanced), (void **) &dbg_adv);
+    DebugConnect(remote_options, __uuidof(IDebugControl), (void **) &dbg_ctrl);
+    DebugConnect(remote_options, __uuidof(IDebugDataSpaces4), (void **) &dbg_mem);
+    DebugConnect(remote_options, __uuidof(IDebugSymbols3), (void **) &dbg_syms);
+    DebugConnect(remote_options, __uuidof(IDebugSystemObjects), (void **) &dbg_sysobjs);
+
     ULONG sbcl_index;
     DEBUG_MODULE_PARAMETERS sbcl_info;
 
@@ -137,39 +146,9 @@ unsigned WINAPI ldb_monitor_trampoline(void *arg) {
     return 0;
 }
 
-LONG breakpoint_handler(EXCEPTION_POINTERS *ExceptionInfo) {
-    if (ExceptionInfo->ExceptionRecord->ExceptionCode != EXCEPTION_BREAKPOINT) {
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-
-    DWORD remote_context_len;
-    CONTEXT *remote_context;
-
-    InitializeContext(nullptr, CONTEXT_ALL, nullptr, &remote_context_len);
-    char remote_context_buf[remote_context_len];
-    InitializeContext(remote_context_buf, CONTEXT_ALL, &remote_context, &remote_context_len);
-    dbg_adv->GetThreadContext(remote_context, remote_context_len);
-
-    ExceptionInfo->ContextRecord->Rip = (DWORD64) ldb_monitor_trampoline;
-    ExceptionInfo->ContextRecord->Rsp = remote_context->Rsp;
-
-    load_remote_pages(remote_context->Rsp, page_size);
-
-    return EXCEPTION_CONTINUE_EXECUTION;
-}
-
-unsigned thread_start_trampoline(void *arg) {
-    DebugConnect(remote_options, __uuidof(IDebugAdvanced), (void **) &dbg_adv);
-    DebugConnect(remote_options, __uuidof(IDebugControl), (void **) &dbg_ctrl);
-    DebugConnect(remote_options, __uuidof(IDebugDataSpaces4), (void **) &dbg_mem);
-    DebugConnect(remote_options, __uuidof(IDebugSymbols3), (void **) &dbg_syms);
-    DebugConnect(remote_options, __uuidof(IDebugSystemObjects), (void **) &dbg_sysobjs);
-    DebugBreak();
-
-    return 0;
-}
-
 int main(int argc, char **argv) {
+    AddVectoredExceptionHandler(TRUE, access_violation_handler);
+    
     remote_options = argv[1];
     DebugConnect(remote_options, __uuidof(IDebugAdvanced), (void **) &dbg_adv);
     DebugConnect(remote_options, __uuidof(IDebugControl), (void **) &dbg_ctrl);
@@ -185,10 +164,31 @@ int main(int argc, char **argv) {
     alloc_gran = sys_info.dwAllocationGranularity;
     page_size = sys_info.dwPageSize;
 
-    HANDLE ldb_thread = (HANDLE) _beginthreadex(nullptr, 0, thread_start_trampoline, nullptr, CREATE_SUSPENDED, nullptr);
+    HANDLE ldb_thread = (HANDLE) _beginthreadex(nullptr, 0, ldb_monitor_trampoline, nullptr, CREATE_SUSPENDED, nullptr);
 
-    AddVectoredExceptionHandler(TRUE, access_violation_handler);
-    AddVectoredExceptionHandler(TRUE, breakpoint_handler);
+    // get remote context
+    DWORD remote_context_len;
+    CONTEXT *remote_context;
+
+    InitializeContext(nullptr, CONTEXT_ALL, nullptr, &remote_context_len);
+    char remote_context_buf[remote_context_len];
+    InitializeContext(remote_context_buf, CONTEXT_ALL, &remote_context, &remote_context_len);
+    dbg_adv->GetThreadContext(remote_context, remote_context_len);
+
+    // set local context
+    DWORD local_context_len;
+    CONTEXT *local_context;
+
+    InitializeContext(nullptr, CONTEXT_ALL, nullptr, &local_context_len);
+    char local_context_buf[local_context_len];
+    InitializeContext(local_context_buf, CONTEXT_ALL, &local_context, &remote_context_len);
+
+    GetThreadContext(ldb_thread, local_context);
+    load_remote_pages(remote_context->Rsp, page_size);
+    local_context->Rsp = remote_context->Rsp;
+    SetThreadContext(ldb_thread, local_context);
+
+    // start the thread
     ResumeThread(ldb_thread);
     WaitForSingleObject(ldb_thread, INFINITE);
     CloseHandle(ldb_thread);

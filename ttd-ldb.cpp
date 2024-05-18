@@ -2,6 +2,7 @@
 #include <cstdlib>
 
 #include <dbgeng.h>
+#include <DbgHelp.h>
 #include <errhandlingapi.h>
 #include <excpt.h>
 #include <fileapi.h>
@@ -25,7 +26,7 @@
 thread_local IDebugAdvanced *dbg_adv = nullptr;
 thread_local IDebugControl *dbg_ctrl = nullptr;
 thread_local IDebugDataSpaces4 *dbg_mem = nullptr;
-thread_local IDebugSymbols  *dbg_syms = nullptr;
+thread_local IDebugSymbols3  *dbg_syms = nullptr;
 thread_local IDebugSystemObjects  *dbg_sysobjs = nullptr;
 
 static const char *remote_options = nullptr;
@@ -87,11 +88,75 @@ LONG access_violation_handler(EXCEPTION_POINTERS *ExceptionInfo) {
 }
 
 unsigned WINAPI ldb_monitor_trampoline(void *arg) {
+    // load remote modules
+    ULONG num_loaded;
+    ULONG num_unloaded;
+    ULONG sbcl_index;
+
+    dbg_syms->GetNumberModules(&num_loaded, &num_unloaded);
+    dbg_syms->GetModuleByModuleName("sbcl", 0, &sbcl_index, nullptr);
+
+    for (int i = 0; i < num_loaded; i += 1) {
+        if (i == sbcl_index) {
+            continue;
+        }
+
+        DEBUG_MODULE_PARAMETERS mod_info;
+        MODULEINFO local_info;
+        HMODULE mod;
+        char buf[1024];
+
+        ZeroMemory(&local_info, sizeof(local_info));
+
+        dbg_syms->GetModuleParameters(1, NULL, i, &mod_info);
+        dbg_syms->GetModuleNameString(DEBUG_MODNAME_IMAGE, i, 0, buf, 1024, NULL);
+        mod = LoadLibraryEx(buf, NULL, 0);
+        GetModuleInformation(GetCurrentProcess(), mod, &local_info, sizeof(local_info));
+        dbg_ctrl->Output(DEBUG_OUTPUT_NORMAL, "%s: %p (bases match? %d)\n", buf, mod, mod_info.Base == (ULONG64) local_info.lpBaseOfDll);
+#if 0
+        GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCSTR) mod_info.Base, &mod);
+
+        if (mod) {
+            continue;
+        }
+
+        load_remote_pages(mod_info.Base, mod_info.Size, FALSE);
+#endif
+    }
+
+    dbg_ctrl->Output(DEBUG_OUTPUT_NORMAL, "loaded libraries\n");
+
+    // fix up IAT
+    DEBUG_MODULE_PARAMETERS sbcl_info;
+    PIMAGE_SECTION_HEADER header;
+    ULONG size;
+
+    dbg_syms->GetModuleParameters(1, NULL, sbcl_index, &sbcl_info);
+
+    PIMAGE_IMPORT_DESCRIPTOR import_desc = (PIMAGE_IMPORT_DESCRIPTOR) ImageDirectoryEntryToDataEx((void *) sbcl_info.Base, TRUE, IMAGE_DIRECTORY_ENTRY_IMPORT, &size, &header);
+
+    for (; import_desc->Name; import_desc++) {
+        LPCSTR import_name = (LPCSTR) (sbcl_info.Base + import_desc->Name);
+
+        dbg_ctrl->Output(DEBUG_OUTPUT_NORMAL, "IAT: %s\n", import_name);
+        HMODULE import_mod = GetModuleHandleA(import_name);
+
+        PIMAGE_THUNK_DATA thunk = (PIMAGE_THUNK_DATA) (sbcl_info.Base + import_desc->FirstThunk);
+        PIMAGE_THUNK_DATA name = (PIMAGE_THUNK_DATA) (sbcl_info.Base + import_desc->Characteristics);
+
+        for (; thunk->u1.Function; thunk++, name++) {
+            LPCSTR proc_name = (LPCSTR) (sbcl_info.Base + ((PIMAGE_IMPORT_BY_NAME) (name->u1.AddressOfData))->Name);
+
+            dbg_ctrl->Output(DEBUG_OUTPUT_NORMAL, "%s @ %p\n", proc_name, thunk->u1.Function);
+            thunk->u1.Function = (ULONGLONG) GetProcAddress(import_mod, proc_name);
+        }
+    }
+
     // set stack limits before anything else
     TEB *current_teb = NtCurrentTeb();
     TEB *remote_teb;
     DWORD old_prot;
-    
+
     dbg_sysobjs->GetCurrentThreadTeb((PULONG64) &remote_teb);
     VirtualProtect(current_teb, sizeof(TEB), PAGE_READWRITE, &old_prot);
     current_teb->Reserved1[1] = remote_teb->Reserved1[1];
@@ -102,7 +167,7 @@ unsigned WINAPI ldb_monitor_trampoline(void *arg) {
     DebugConnect(remote_options, __uuidof(IDebugAdvanced), (void **) &dbg_adv);
     DebugConnect(remote_options, __uuidof(IDebugControl), (void **) &dbg_ctrl);
     DebugConnect(remote_options, __uuidof(IDebugDataSpaces4), (void **) &dbg_mem);
-    DebugConnect(remote_options, __uuidof(IDebugSymbols), (void **) &dbg_syms);
+    DebugConnect(remote_options, __uuidof(IDebugSymbols3), (void **) &dbg_syms);
     DebugConnect(remote_options, __uuidof(IDebugSystemObjects), (void **) &dbg_sysobjs);
 #endif
 
@@ -118,32 +183,6 @@ unsigned WINAPI ldb_monitor_trampoline(void *arg) {
 
     TlsSetValue(sbcl_thread_tls_index, remote_teb->TlsSlots[sbcl_thread_tls_index]);
 
-    // load remote modules
-    ULONG num_loaded;
-    ULONG num_unloaded;
-    ULONG sbcl_index;
-
-    dbg_syms->GetNumberModules(&num_loaded, &num_unloaded);
-    dbg_syms->GetModuleByModuleName("sbcl", 0, &sbcl_index, nullptr);
-
-    for (int i = 0; i < num_loaded; i += 1) {
-        if (i == sbcl_index) {
-            continue;
-        }
-
-        DEBUG_MODULE_PARAMETERS mod_info;
-        HMODULE mod;
-
-        dbg_syms->GetModuleParameters(1, NULL, i, &mod_info);
-        GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCSTR) mod_info.Base, &mod);
-
-        if (mod) {
-            continue;
-        }
-
-        load_remote_pages(mod_info.Base, mod_info.Size, FALSE);
-    }
-
     // run ldb
     DWORD remote_context_len;
     CONTEXT *remote_context;
@@ -153,9 +192,13 @@ unsigned WINAPI ldb_monitor_trampoline(void *arg) {
     InitializeContext(remote_context_buf, CONTEXT_INTEGER, &remote_context, &remote_context_len);
     dbg_adv->GetThreadContext(remote_context, remote_context_len);
 
+    dbg_ctrl->Output(DEBUG_OUTPUT_NORMAL, "about to set interrupt context\n");
+
     ULONG64 fake_foreign_function_call_noassert;
     dbg_syms->GetOffsetByName("sbcl!fake_foreign_function_call_noassert",  &fake_foreign_function_call_noassert);
     ((void (*)(CONTEXT **)) (fake_foreign_function_call_noassert))(&remote_context);
+
+    dbg_ctrl->Output(DEBUG_OUTPUT_NORMAL, "finished setting interrupt context\n");
 
     ULONG64 ldb_monitor;
     dbg_syms->GetOffsetByName("sbcl!ldb_monitor",  &ldb_monitor);
@@ -189,7 +232,7 @@ unsigned thread_start_trampoline(void *arg) {
     DebugConnect(remote_options, __uuidof(IDebugAdvanced), (void **) &dbg_adv);
     DebugConnect(remote_options, __uuidof(IDebugControl), (void **) &dbg_ctrl);
     DebugConnect(remote_options, __uuidof(IDebugDataSpaces4), (void **) &dbg_mem);
-    DebugConnect(remote_options, __uuidof(IDebugSymbols), (void **) &dbg_syms);
+    DebugConnect(remote_options, __uuidof(IDebugSymbols3), (void **) &dbg_syms);
     DebugConnect(remote_options, __uuidof(IDebugSystemObjects), (void **) &dbg_sysobjs);
     DebugBreak();
 
@@ -201,7 +244,7 @@ int main(int argc, char **argv) {
     DebugConnect(remote_options, __uuidof(IDebugAdvanced), (void **) &dbg_adv);
     DebugConnect(remote_options, __uuidof(IDebugControl), (void **) &dbg_ctrl);
     DebugConnect(remote_options, __uuidof(IDebugDataSpaces4), (void **) &dbg_mem);
-    DebugConnect(remote_options, __uuidof(IDebugSymbols), (void **) &dbg_syms);
+    DebugConnect(remote_options, __uuidof(IDebugSymbols3), (void **) &dbg_syms);
     DebugConnect(remote_options, __uuidof(IDebugSystemObjects), (void **) &dbg_sysobjs);
 
     dbg_ctrl->Output(DEBUG_OUTPUT_NORMAL, "debug clients connected, hello!\n");
@@ -210,7 +253,7 @@ int main(int argc, char **argv) {
 
     GetSystemInfo(&sys_info);
     alloc_gran = sys_info.dwAllocationGranularity;
-    page_size = sys_info.dwPageSize;    
+    page_size = sys_info.dwPageSize;
 
     HANDLE ldb_thread = (HANDLE) _beginthreadex(nullptr, 0, thread_start_trampoline, nullptr, CREATE_SUSPENDED, nullptr);
 

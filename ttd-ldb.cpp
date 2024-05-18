@@ -73,7 +73,6 @@ LONG access_violation_handler(EXCEPTION_POINTERS *ExceptionInfo) {
     ULONG64 base_addr = fault_addr - (fault_addr % alloc_gran);
 
     BOOL is_stack = llabs((LONG64) fault_addr - (LONG64) ExceptionInfo->ContextRecord->Rsp) <= page_size;
-    // printf("access violation at %p (rw=%d, rip=%p, rsp=%p, rax=%p)\n", (void *) fault_addr, rw_flag, ExceptionInfo->ExceptionRecord->ExceptionAddress, (void *) ExceptionInfo->ContextRecord->Rsp, (void *) ExceptionInfo->ContextRecord->Rax);
     load_remote_pages(is_stack ? fault_addr : base_addr, alloc_gran, is_stack);
 
     if (rw_flag == 8) {

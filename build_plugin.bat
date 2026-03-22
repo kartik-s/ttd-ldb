@@ -1,1 +1,0 @@
-clang -Wall -g -gcodeview -Wl,"/DLL" -Wl,"/DELAYLOAD:dbgeng.dll" -o ttldb.dll ttldb.cpp -ldbgeng -ldelayimp

@@ -131,13 +131,13 @@ unsigned WINAPI ldb_monitor_trampoline(void *arg) {
     InitializeContext(remote_context_buf, CONTEXT_INTEGER, &remote_context, &remote_context_len);
     dbg_adv->GetThreadContext(remote_context, remote_context_len);
 
-    dbg_ctrl->Output(DEBUG_OUTPUT_NORMAL, "about to set interrupt context\n");
+    dbg_ctrl->Output(DEBUG_OUTPUT_NORMAL, "about to save interrupt context\n");
 
-    ULONG64 fake_foreign_function_call_noassert;
-    dbg_syms->GetOffsetByName("sbcl!fake_foreign_function_call_noassert",  &fake_foreign_function_call_noassert);
-    ((void (*)(CONTEXT **)) (fake_foreign_function_call_noassert))(&remote_context);
+    ULONG64 save_context_for_ldb;
+    dbg_syms->GetOffsetByName("sbcl!save_context_for_ldb",  &save_context_for_ldb);
+    ((void (*)(CONTEXT **)) (save_context_for_ldb))(&remote_context);
 
-    dbg_ctrl->Output(DEBUG_OUTPUT_NORMAL, "finished setting interrupt context\n");
+    dbg_ctrl->Output(DEBUG_OUTPUT_NORMAL, "finished saving interrupt context\n");
 
     ULONG64 ldb_monitor;
     dbg_syms->GetOffsetByName("sbcl!ldb_monitor",  &ldb_monitor);

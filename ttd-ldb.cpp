@@ -181,7 +181,7 @@ int main(int argc, char **argv) {
 
     InitializeContext(nullptr, CONTEXT_ALL, nullptr, &local_context_len);
     char local_context_buf[local_context_len];
-    InitializeContext(local_context_buf, CONTEXT_ALL, &local_context, &remote_context_len);
+    InitializeContext(local_context_buf, CONTEXT_ALL, &local_context, &local_context_len);
 
     GetThreadContext(ldb_thread, local_context);
     load_remote_pages(remote_context->Rsp, page_size);

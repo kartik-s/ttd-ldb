@@ -24,3 +24,60 @@ Next, the thread copies its stack extents from the remote thread so that stack b
 Finally, the thread prepares to call into LDB. It stores the remote thread's context in the local thread's interrupt context array. LDB consults the interrupt context array to determine where the Lisp code stopped, so this ensures that LDB thinks it is wherever the remote thread was executing at the current point in the TTD trace.
 
 Once this is set, the thread calls `ldb_monitor`, and the debugger starts as if it were running in the original process.
+
+## How to build
+### `ttd-ldb`
+Run `build.bat` in a Command Prompt or PowerShell that has Clang available. If you installed Clang through the Visual Studio Installer, you can use the Developer Command Prompt/PowerShell.
+
+### SBCL
+SBCL does not work out of the box with `ttd-ldb`. TTD only logs memory addresses that are accessed by userspace instructions[^1], but SBCL loads core files into process memory using `NtReadFile`, which does kernel-mode I/O. Touching every byte in the mapped core file chunks with an explicit read instruction as they are loaded solves this. To achieve this, apply this patch to SBCL and build it as usual:
+
+```diff
+diff --git a/src/runtime/win32-os.c b/src/runtime/win32-os.c
+index 2a09fd118..c8a52b357 100644
+--- a/src/runtime/win32-os.c
++++ b/src/runtime/win32-os.c
+@@ -723,6 +723,7 @@ void* load_core_bytes(int fd, os_vm_offset_t offset, os_vm_address_t addr, os_vm
+         if (count == -1) {
+             perror("read() failed"); fflush(stderr);
+         }
++        for (size_t i = 0; i < count; i++) asm volatile ("" : : "r" (*((char *) addr + i)));
+         addr += count;
+         len -= count;
+         gc_assert(count == (int) to_read);
+```
+
+[^1]: While WinDbg is closed-source, Microsoft did publish a paper describing the tracing framework used by the Time Travel Debugger[^2]. Here are the most pertinent passages:
+
+> Section 1: Introduction
+> "we do not trace kernel mode execution"
+
+> "However, any pertinent changes in kernel mode operation that
+> can affect an application’s behavior are captured. For example,
+> consider an asynchronous I/O that results in a callback to the
+> application. Although we do not capture the I/O that happens in
+> kernel mode, we do detect the callback in user mode and any
+> subsequent instruction that reads the results of the I/O operation
+> will get logged."
+
+> Section 3.1.1: Data Cache Compression
+> "One of the components of the iDNA Trace Writer is a tag-less
+> direct mapped cache for each guest process thread. The cache is
+> designed to hold the last accessed value for memory accesses for
+> the thread. The cache is indexed by the accessed address. The cache
+> buffer is initialized to all zeros. Every time an instruction reads a
+> value from memory, the value is compared to its mapped position
+> in the cache. The value is logged in the trace file only if the cached
+> value is different from the actual value read from memory. Reading
+> a different value from a memory location compared to previously
+> written value to the same location can happen due to a change
+> to the memory location during kernel mode execution, DMA, or
+> by a thread running on a different processor."
+
+I inferred from these passages that:
+
+1. The trace recorder does not capture kernel-mode I/O like that done by NtReadFile.
+2. The trace recorder only logs memory values that are addressed by user-mode instructions.
+3. All other (mapped) memory values are logged as zero.
+
+[^2]: https://www.usenix.org/legacy/events/vee06/full_papers/p154-bhansali.pdf

@@ -1,6 +1,8 @@
 # ttd-ldb
 Run SBCL's low-level debugger (LDB) against a dead process.
 
+> **Note**: This is a proof of concept.
+
 ![demo](demo.gif)
 
 ## Background

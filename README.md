@@ -47,6 +47,23 @@ index 2a09fd118..c8a52b357 100644
          gc_assert(count == (int) to_read);
 ```
 
+## Usage
+1. [Record a trace](https://learn.microsoft.com/en-us/windows-hardware/drivers/debuggercmds/time-travel-debugging-record) of SBCL using WinDbg TTD.
+
+2. Use the [replay](https://learn.microsoft.com/en-us/windows-hardware/drivers/debuggercmds/time-travel-debugging-replay) or [timeline](https://learn.microsoft.com/en-us/windows-hardware/drivers/debuggercmds/windbg-timeline-preview) features to navigate to the position in the trace where you want a backtrace. Make sure that the instruction pointer corresponds to a Lisp address.
+
+3. Start a debug server:
+```
+.server npipe:Pipe=foo
+```
+
+4. Run `ttd-ldb`, passing the debug server information as an argument:
+```
+ttd-ldb.exe npipe:Pipe=foo,Server=localhost
+```
+
+5. Use `ldb` as if you were in the remote process.
+
 [^1]: While WinDbg is closed-source, Microsoft did publish a paper describing the tracing framework used by the Time Travel Debugger[^2]. Here are the most pertinent passages:
 
     > Section 1: Introduction

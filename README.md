@@ -17,7 +17,7 @@ The setup process ensures that this access violation recovers into smooth execut
 
 The second step is to create a local thread with the same stack and stack pointer as the remote thread. The local thread runs a function that will eventually call into LDB. It begins by loading all the DLLs that are loaded in the remote process into the local one by name. ASLR removes any guarantee that the local DLLs will load into the same addresses as in the remote process. This is a problem because all the code paged in from the remote process calls into external DLLs through the remote import address table (IAT), which contains call addresses that don't work in the local address space because of ASLR.
 
-Each IAT entry consists of a function identifier, usually a name, and a function address. Patching the IAT by looking up each identifier in the appropriate local DLL and writing back the local function address fixes the ASLR issue.
+Each IAT entry consists of a function identifier, usually a name, and a function address. Patching the local IAT by looking up each identifier in the appropriate local DLL and writing back the local function address fixes the ASLR issue.
 
 Next, the thread copies its stack extents from the remote thread so that stack bounds checks line up with the remote stack that the parent thread set. The thread also copies a TLS value from the remote thread so that `get_sb_vm_thread()` returns the correct thread.
 

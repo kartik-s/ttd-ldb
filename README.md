@@ -62,6 +62,7 @@ index 2a09fd118..c8a52b357 100644
     > will get logged."
 
     > Section 3.1.1: Data Cache Compression
+
     > "One of the components of the iDNA Trace Writer is a tag-less
     > direct mapped cache for each guest process thread. The cache is
     > designed to hold the last accessed value for memory accesses for

@@ -11,7 +11,7 @@ The bug turned out to be a Windows-only error in the conservative stack scanning
 I developed `ttd-ldb` to solve this problem.
 
 ## How it works
-`ttd-ldb` connects as a client to WinDbg's debug server, communicating with it using the `DbgEng` API. It starts as an empty process. The final thing it does is to query the remote process for the address of `ldb_monitor`, the entry point to SBCL's low-level debugger, and call into it. This immediately triggers an access violation because the code is not present in the process.
+`ttd-ldb` connects as a client to WinDbg's debug server, communicating with it using the `DbgEng` API. It starts as an empty process. The final thing it does is to query the remote debugger for the address of `ldb_monitor`, the entry point to SBCL's low-level debugger, and call into it. This immediately triggers an access violation because the code is not present in the process.
 
 The setup process ensures that this access violation recovers into smooth execution of LDB instead of a crash. The first step is to set an access violation handler that copies the memory page containing the faulting address from the remote process into the local one and then restarts execution from the faulting instruction.
 

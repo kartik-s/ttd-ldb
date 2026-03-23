@@ -72,7 +72,7 @@ ttd-ldb.exe npipe:Pipe=foo,Server=localhost
 
 6. Use `ldb` as if you were in the remote process.
 
-## Demo
+### Demo
 https://github.com/user-attachments/assets/a970f711-a71c-4cbb-82ac-0ab0455eda45
 
 

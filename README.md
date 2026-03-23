@@ -57,7 +57,7 @@ index 2a09fd118..c8a52b357 100644
 .server npipe:Pipe=foo
 ```
 
-4. Run `ttd-ldb`, passing the debug server information as an argument:
+4. Run `ttd-ldb` in a separate Command Prompt or PowerShell, passing the debug server information as an argument:
 ```
 ttd-ldb.exe npipe:Pipe=foo,Server=localhost
 ```

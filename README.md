@@ -50,6 +50,7 @@ index 2a09fd118..c8a52b357 100644
 [^1]: While WinDbg is closed-source, Microsoft did publish a paper describing the tracing framework used by the Time Travel Debugger[^2]. Here are the most pertinent passages:
 
     > Section 1: Introduction
+
     > "we do not trace kernel mode execution"
 
     > "However, any pertinent changes in kernel mode operation that

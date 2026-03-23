@@ -1,5 +1,5 @@
 # ttd-ldb
-Run SBCL's low-level debugger (LDB) against a dead process.
+Run SBCL's low-level debugger (LDB) against a time travel debugger trace.
 
 > **Note**: This is a proof of concept.
 

@@ -53,22 +53,23 @@ index 2a09fd118..c8a52b357 100644
 2. Use the [replay](https://learn.microsoft.com/en-us/windows-hardware/drivers/debuggercmds/time-travel-debugging-replay) or [timeline](https://learn.microsoft.com/en-us/windows-hardware/drivers/debuggercmds/windbg-timeline-preview) features to navigate to the position in the trace where you want a backtrace. Make sure that the instruction pointer corresponds to a Lisp address.
 
 3. Start a debug server:
-```
-.server npipe:Pipe=foo
-```
+    ```
+    .server npipe:Pipe=foo
+    ```
 
 4. Copy all the DLLs from the WinDbg `amd64` folder into the directory containing `ttd-ldb.exe`. On my machine this is:
 
-```
-C:\Program Files\WindowsApps\Microsoft.WinDbg_1.2601.12001.0_x64__8wekyb3d8bbwe\amd64
-```
+    ```
+    C:\Program Files\WindowsApps\Microsoft.WinDbg_1.2601.12001.0_x64__8wekyb3d8bbwe\amd64
+    ```
 
-This ensures that `ttd-ldb` uses the same DLLs as WinDbg.
+    This ensures that `ttd-ldb` uses the same DLLs as WinDbg.
 
 5. Run `ttd-ldb` in a separate Command Prompt or PowerShell, passing the debug server information as an argument:
-```
-ttd-ldb.exe npipe:Pipe=foo,Server=localhost
-```
+    
+    ```
+    ttd-ldb.exe npipe:Pipe=foo,Server=localhost
+    ```
 
 6. Use `ldb` as if you were in the remote process.
 

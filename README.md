@@ -57,12 +57,20 @@ index 2a09fd118..c8a52b357 100644
 .server npipe:Pipe=foo
 ```
 
-4. Run `ttd-ldb` in a separate Command Prompt or PowerShell, passing the debug server information as an argument:
+4. Copy all the DLLs from the WinDbg `amd64` folder into the directory containing `ttd-ldb.exe`. On my machine this is:
+
+```
+C:\Program Files\WindowsApps\Microsoft.WinDbg_1.2601.12001.0_x64__8wekyb3d8bbwe\amd64
+```
+
+This ensures that `ttd-ldb` uses the same DLLs as WinDbg.
+
+5. Run `ttd-ldb` in a separate Command Prompt or PowerShell, passing the debug server information as an argument:
 ```
 ttd-ldb.exe npipe:Pipe=foo,Server=localhost
 ```
 
-5. Use `ldb` as if you were in the remote process.
+6. Use `ldb` as if you were in the remote process.
 
 ## Demo
 https://github.com/user-attachments/assets/a970f711-a71c-4cbb-82ac-0ab0455eda45

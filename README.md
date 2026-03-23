@@ -108,7 +108,7 @@ https://github.com/user-attachments/assets/a970f711-a71c-4cbb-82ac-0ab0455eda45
 
     I inferred from these passages that:
 
-    1. The trace recorder does not capture kernel-mode I/O like that done by NtReadFile.
+    1. The trace recorder does not capture kernel-mode I/O like that done by `NtReadFile`.
     2. The trace recorder only logs memory values that are addressed by user-mode instructions.
     3. All other (mapped) memory values are logged as zero.
 

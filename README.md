@@ -49,35 +49,35 @@ index 2a09fd118..c8a52b357 100644
 
 [^1]: While WinDbg is closed-source, Microsoft did publish a paper describing the tracing framework used by the Time Travel Debugger[^2]. Here are the most pertinent passages:
 
-> Section 1: Introduction
-> "we do not trace kernel mode execution"
+    > Section 1: Introduction
+    > "we do not trace kernel mode execution"
 
-> "However, any pertinent changes in kernel mode operation that
-> can affect an application’s behavior are captured. For example,
-> consider an asynchronous I/O that results in a callback to the
-> application. Although we do not capture the I/O that happens in
-> kernel mode, we do detect the callback in user mode and any
-> subsequent instruction that reads the results of the I/O operation
-> will get logged."
+    > "However, any pertinent changes in kernel mode operation that
+    > can affect an application’s behavior are captured. For example,
+    > consider an asynchronous I/O that results in a callback to the
+    > application. Although we do not capture the I/O that happens in
+    > kernel mode, we do detect the callback in user mode and any
+    > subsequent instruction that reads the results of the I/O operation
+    > will get logged."
 
-> Section 3.1.1: Data Cache Compression
-> "One of the components of the iDNA Trace Writer is a tag-less
-> direct mapped cache for each guest process thread. The cache is
-> designed to hold the last accessed value for memory accesses for
-> the thread. The cache is indexed by the accessed address. The cache
-> buffer is initialized to all zeros. Every time an instruction reads a
-> value from memory, the value is compared to its mapped position
-> in the cache. The value is logged in the trace file only if the cached
-> value is different from the actual value read from memory. Reading
-> a different value from a memory location compared to previously
-> written value to the same location can happen due to a change
-> to the memory location during kernel mode execution, DMA, or
-> by a thread running on a different processor."
+    > Section 3.1.1: Data Cache Compression
+    > "One of the components of the iDNA Trace Writer is a tag-less
+    > direct mapped cache for each guest process thread. The cache is
+    > designed to hold the last accessed value for memory accesses for
+    > the thread. The cache is indexed by the accessed address. The cache
+    > buffer is initialized to all zeros. Every time an instruction reads a
+    > value from memory, the value is compared to its mapped position
+    > in the cache. The value is logged in the trace file only if the cached
+    > value is different from the actual value read from memory. Reading
+    > a different value from a memory location compared to previously
+    > written value to the same location can happen due to a change
+    > to the memory location during kernel mode execution, DMA, or
+    > by a thread running on a different processor."
 
-I inferred from these passages that:
+    I inferred from these passages that:
 
-1. The trace recorder does not capture kernel-mode I/O like that done by NtReadFile.
-2. The trace recorder only logs memory values that are addressed by user-mode instructions.
-3. All other (mapped) memory values are logged as zero.
+    1. The trace recorder does not capture kernel-mode I/O like that done by NtReadFile.
+    2. The trace recorder only logs memory values that are addressed by user-mode instructions.
+    3. All other (mapped) memory values are logged as zero.
 
 [^2]: https://www.usenix.org/legacy/events/vee06/full_papers/p154-bhansali.pdf

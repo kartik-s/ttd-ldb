@@ -64,6 +64,10 @@ ttd-ldb.exe npipe:Pipe=foo,Server=localhost
 
 5. Use `ldb` as if you were in the remote process.
 
+## Demo
+
+<video src="usage-demo.mp4" controls width="100%"></video>
+
 [^1]: While WinDbg is closed-source, Microsoft did publish a paper describing the tracing framework used by the Time Travel Debugger[^2]. Here are the most pertinent passages:
 
     > Section 1: Introduction

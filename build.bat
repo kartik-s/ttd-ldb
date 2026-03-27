@@ -1,1 +1,1 @@
-clang++ -Wall -g -gcodeview -fuse-ld=lld -Wl,/pdb: -o ttd-ldb.exe ttd-ldb.cpp -ldbgeng -ldbghelp -Wno-vla-cxx-extension
+clang++ -Wall -g -gcodeview -fuse-ld=lld -Wl,/pdb: -o ttd-ldb.exe ttd_ldb.cpp -ldbgeng -ldbghelp -Wno-vla-cxx-extension

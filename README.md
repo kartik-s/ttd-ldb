@@ -59,10 +59,10 @@ index 2a09fd118..c8a52b357 100644
     .server npipe:Pipe=foo
     ```
 
-4. Copy all the DLLs from the WinDbg `amd64` folder into the directory containing `ttd-ldb.exe`. On my machine this is:
-
-    ```
-    C:\Program Files\WindowsApps\Microsoft.WinDbg_1.2601.12001.0_x64__8wekyb3d8bbwe\amd64
+4. Copy all the DLLs from the WinDbg `amd64` folder into the directory containing `ttd-ldb.exe`:
+    
+    ```powershell
+    Copy-Item (Join-Path (Get-AppxPackage -Name "Microsoft.WinDbg").InstallLocation "amd64\*.dll") -Destination . -Force
     ```
 
     This ensures that `ttd-ldb` uses the same DLLs as WinDbg.

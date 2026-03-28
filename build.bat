@@ -1,1 +1,2 @@
-clang++ -Wall -g -gcodeview -fuse-ld=lld -Wl,/pdb: -o ttd-ldb.exe ttd_ldb.cpp -ldbgeng -ldbghelp -Wno-vla-cxx-extension
+clang++ -Wall -shared -g -gcodeview -fuse-ld=lld -Wl,/pdb: -Wl,/def:touch_read.def -o touch-read.dll touch_read.cpp -ldetours -LDetours/lib.X64 -IDetours/include -Wno-microsoft-cast
+clang++ -Wall -g -gcodeview -fuse-ld=lld -Wl,/pdb:  -o ttd-ldb.exe ttd_ldb.cpp -ldbgeng -ldbghelp -Wno-vla-cxx-extension
